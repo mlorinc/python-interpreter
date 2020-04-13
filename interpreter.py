@@ -767,9 +767,11 @@ def conditionalJump(interpreter: IPPInterpreter, instruction: Instruction, label
     (symb1Type, symb1Value) = getSymbol(interpreter, symb1, Argument.SYMB)
     (symb2Type, symb2Value) = getSymbol(interpreter, symb2, Argument.SYMB)
 
-    if symb1Type == symb2Type and predicate(symb1Value, symb2Value):
+    result = predicate(symb1Value, symb2Value)
+
+    if symb1Type == symb2Type and result:
         return (IPPInterpreterCommand.JUMP, {"label": label.value})
-    elif symb1Type == symb2Type or symb1Type == ArgumentType.NIL or symb2Type == ArgumentType.NIL:
+    elif (symb1Type == symb2Type or symb1Type == ArgumentType.NIL or symb2Type == ArgumentType.NIL) and result:
         return None
     else:
         raise InterpreterError(

@@ -180,6 +180,10 @@ function getFile($args, $key, $default) {
 
 function walk($file, $recursive = false)
 {
+    if (!file_exists($file)) {
+        throw new TestError(TestError::FILE_OPEN, "Test directory does not exist - $file");
+    }
+
     $fileStack = array($file);
     $started = false;
 
@@ -206,12 +210,45 @@ function walk($file, $recursive = false)
     }
 }
 
+function diffFiles($expectedOutputFile, $actualOutputFile)
+{
+    $expectedFile = false;
+    $outputFile = false;
+    if($expectedFile = fopen($expectedOutputFile, "r") && $outputFile = fopen($actualOutputFile, "r")) {
+        while (true) {
+            $line1 = fgets($expectedFile);
+            $line2 = fgets($outputFile);
+
+            if ($line1 !== $line2) {
+                fclose($expectedFile);
+                fclose($outputFile);
+                return false;
+            }
+            if ($line1 === false) {
+                fclose($expectedFile);
+                fclose($outputFile);
+                return true;
+            }
+        }
+    }
+    else {
+        if ($expectedFile) {
+            fclose($expectedFile);
+            throw new TestError(TestError::FILE_OPEN, "Could not open file $actualOutputFile");
+        }
+        else {
+            throw new TestError(TestError::FILE_OPEN, "Could not open file $expectedOutputFile");
+        }
+    }
+}
+
 class TestCase {
     public $in;
     public $src;
     public $out;
     public $rc;
     public $name;
+    private $cachedRc = null;
 
     public function __construct($name)
     {
@@ -255,9 +292,14 @@ class TestCase {
 
     public function getRc()
     {
+        if ($this->cachedRc !== null) {
+            return $this->cachedRc;
+        }
+
         if ($f = fopen($this->getFileNameFor("rc"), "r")) {
             $rc = 0;
             fscanf($f, "%d", $rc);
+            $this->cachedRc = $rc;
             return $rc;
         }
         else {
@@ -265,18 +307,77 @@ class TestCase {
         }
     }
 
+    public function parse($php, $parseScript, $sourceFile, $outputFile) {
+        $rc = -1;
+        $out = null;
+        exec("$php $parseScript < $sourceFile > " . $outputFile, $out, $rc);
+        return $rc;
+    }
+
+    public function interpret($python, $intScript, $sourceFile, $inputFile, $outputFile) {
+        $rc = -1;
+        exec("$python $intScript --source=\"$sourceFile\" --input=\"$inputFile\" > " . $outputFile, $out, $rc);
+        return $rc;
+    }
+
     public function compareParseOnly($php, $jar, $parseScript)
     {
-        $rc = null;
-        $out = null;
-        unset($out);
-        exec("$php $parseScript < $this->src > " . $this->getFileNameFor(".xml"), $out, $rc);
+        $file = $this->getFileNameFor("xml");
+        $expectedOutput = $this->out;
+        $rc = $this->parse($php, $parseScript, $this->src, $file);
 
-        if ($rc === 0) {
-            exec("$jar ");
+        if ($rc === 0 && $this->getRc() === 0) {
+            $out = null;
+            exec("java -jar $jar \"$file\" \"$expectedOutput\" options", $out, $rc);
+            unlink($file);
+            return $rc === 0;
         }
         else {
-            return $rc !== $this->getRc();
+            unlink($file);
+            return $rc === $this->getRc();
+        }
+    }
+
+    public function compareIntOnly($python, $intScript)
+    {
+        $file = $this->getFileNameFor("result");
+        $expectedOutput = $this->out;
+        $rc = $this->interpret($python, $intScript, $this->src, $this->in, $file);
+
+        if ($rc === 0 && $this->getRc() === 0) {
+            $result = diffFiles($expectedOutput, $file);
+            unlink($file);
+            return $result;
+        }
+        else {
+            unlink($file);
+            return $rc === $this->getRc();
+        }
+    }
+
+    public function compare($php, $parseScript, $python, $intScript)
+    {
+        $xml = $this->getFileNameFor("xml");
+        $programOutputFile = $this->getFileNameFor("output");
+        $rc = $this->parse($php, $parseScript, $this->src, $xml);
+
+        if ($rc !== 0) {
+            unlink($xml);
+            return $rc === $this->getRc();
+        }
+
+        $rc = $this->interpret($python, $intScript, $xml, $this->in, $programOutputFile);
+
+        if ($rc === 0 && $this->getRc() === 0) {
+            $result = diffFiles($this->out, $programOutputFile);
+            unlink($xml);
+            unlink($programOutputFile);
+            return $result;
+        }
+        else {
+            unlink($xml);
+            unlink($programOutputFile);
+            return $rc === $this->getRc();
         }
     }
 }
@@ -290,17 +391,15 @@ function groupFiles($generator) {
     $currentTestCase = new TestCase(null);
     foreach ($generator as $file) {
         $testName = getTestName($file);
-
+        
         if ($testName != $currentTestCase->name) {
             if ($currentTestCase->isValid()) {
                 yield $currentTestCase;
             }
-
             $currentTestCase = new TestCase($testName);
         }
 
         $fileExtension = pathinfo($file, PATHINFO_EXTENSION);
-
         switch ($fileExtension) {
             case "src":
                 $currentTestCase->src = $file;
@@ -319,11 +418,34 @@ function groupFiles($generator) {
                 break;
         }
     }
+    if ($currentTestCase->isValid()) {
+        yield $currentTestCase;
+    }
+}
+
+function parseOnlyTest($parseScript, $jexamxml)
+{
+    return function($testCase) use($parseScript, $jexamxml) {
+        return $testCase->compareParseOnly("php7.4", $jexamxml, $parseScript);
+    };
+}
+
+function intOnlyTest($intScript)
+{
+    return function($testCase) use($intScript) {
+        return $testCase->compareIntOnly("python3.8", $intScript);
+    };
+}
+
+function bothTest($parseScript, $intScript)
+{
+    return function($testCase) use($parseScript, $intScript) {
+        return $testCase->compare("php7.4", $parseScript, "python3.8", $intScript);
+    };
 }
 
 function main()
 {
-    global $argc;
     global $argv;
 
     try {
@@ -351,23 +473,71 @@ function main()
 
         $directory = getFile($args, "directory", function() { return findFileInCwd(null); });
         $recursive = $args->getSingleOrDefault("recursive", false);
-        $parseScript = getFile($args, "parse-script", function() { return findFileInCwd("parse.php"); });
-        $intScript = getFile($args, "int-script", function() { return findFileInCwd("interpret.py"); });
         $parseOnly = $args->getSingleOrDefault("parse-only", false);
         $intOnly = $args->getSingleOrDefault("int-only", false);
+        $parseScript = getFile($args, "parse-script", false);
+        $intScript = getFile($args, "int-script", false);
         $jexamxml = getFile($args, "jexamxml", function() { return findFileInCwd("jexamxml.jar"); });
         
+        $testFn = null;
+        $errors = array();
+
+        if ($intOnly) {
+            if ($parseOnly) {
+                array_push($errors, "--int-only cannot be combine with --parse-only");
+            }
+            if ($parseScript) {
+                array_push($errors, "--int-only cannot be combine with --parse-script");
+            }
+            if (count($errors) === 0) {
+                $intScript = getFile($args, "int-script", function() { return findFileInCwd("interpret.py"); });
+                $testFn = intOnlyTest($intScript);
+            }
+        }
+        else if ($parseOnly) {
+            if ($intOnly) {
+                array_push($errors, "--parse-only cannot be combine with --int-only");
+            }
+            if ($intScript) {
+                array_push($errors, "--parse-only cannot be combine with --int-script");
+            }
+            if (count($errors) === 0) {
+                $parseScript = getFile($args, "parse-script", function() { return findFileInCwd("parse.php"); });
+                $testFn = parseOnlyTest($parseScript, $jexamxml);
+            }
+        }
+        else {
+            $parseScript = getFile($args, "parse-script", function() { return findFileInCwd("parse.php"); });
+            $intScript = getFile($args, "int-script", function() { return findFileInCwd("interpret.py"); });
+            $testFn = bothTest($parseScript, $intScript);
+        }
+
+        if (count($errors) > 0) {
+            throw new TestError(TestError::MISSING_PARAM, join("\n", $errors));
+        }
+
+        $passed = 0;
+        $failed = 0;
+
         $groupedFiles = groupFiles(walk($directory, $recursive));
 
         foreach ($groupedFiles as $testCase) {
-            print("$testCase\n");
+            $result = $testFn($testCase);
+            if ($result === true) {
+                $passed++;
+            }
+            else {
+                $failed++;
+            }
+            fprintf(STDERR, "%s - %s\n", $testCase->name, $result === true ? "PASSED" : "FAILED");
         }
+
+        fprintf(STDERR, "PASSED: %d\nFAILED: %d\nTOTAL: %d\n", $passed, $failed, $passed + $failed);
     }
     catch(TestError $e) {
         fprintf(STDERR, "Error: {$e->getMessage()}\nStatus code: {$e->statusCode}\n");
+        exit($e->statusCode);
     }
 }
 
 main();
-
-?>
