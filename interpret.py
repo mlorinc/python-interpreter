@@ -1378,17 +1378,21 @@ def i_read(interpreter: IPPInterpreter, instruction: Instruction, var: Argument,
             try:
                 inputType, inputValue = parseToTokens(arg.value, content, instruction)
             except InterpreterError as e:
-                raise EOFError()
+                valueType = ArgumentType.NIL if arg.value != ArgumentType.BOOL else ArgumentType.BOOL
+                value = "nil" if arg.value != ArgumentType.BOOL else False
+                interpreter.memory.setVariable(var.scope, var.value, valueType, value, var)
+                return None
                 
 
         if inputType not in {ArgumentType.STRING, ArgumentType.BOOL, ArgumentType.INT, ArgumentType.FLOAT}:
-            raise EOFError()
-
-        interpreter.memory.setVariable(
-            var.scope, var.value, inputType, inputValue, instruction)
+            valueType = ArgumentType.NIL if arg.value != ArgumentType.BOOL else ArgumentType.BOOL
+            value = "nil" if arg.value != ArgumentType.BOOL else False
+            interpreter.memory.setVariable(var.scope, var.value, valueType, value, var)
+        else:
+            interpreter.memory.setVariable(
+                var.scope, var.value, inputType, inputValue, instruction)
     except EOFError:
-        interpreter.memory.setVariable(
-            var.scope, var.value, ArgumentType.NIL, "nil", var)
+        interpreter.memory.setVariable(var.scope, var.value, ArgumentType.NIL, "nil", var)
 
 
 @Instruction.register
