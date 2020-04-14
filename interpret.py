@@ -73,6 +73,7 @@ class IPPInterpreterCommand(IntEnum):
     CALL = 1
     JUMP = 2
     RETURN = 3
+    DEBUG = 4
 
 
 class ParsingDone(Exception):
@@ -338,6 +339,9 @@ class Memory(object):
         self.memoryStack = list()
         self.stack = list()
 
+    def __str__(self):
+        return f"LF = {self.lf},TF = {self.tf}, GF = {self.gf}, Frame stack: {self.memoryStack}, Data stack: {self.stack}"
+
     def createFrame(self):
         self.tf = dict()
 
@@ -348,7 +352,7 @@ class Memory(object):
 
         self.memoryStack.append(self.tf)
         self.lf = self.tf
-        self.tf = dict()
+        self.tf = None
 
     def popFrame(self, element: Element):
         try:
@@ -358,35 +362,45 @@ class Memory(object):
             raise InterpreterError(element,
                                    IPPError.FRAME_DOES_NOT_EXIST, "Cannot pop frame. Frame stack is empty")
 
-    def _getFrame(self, scope: str):
+    def _getFrame(self, scope: str, element: Element):
         if scope == "GF":
             return self.gf
         elif scope == "LF":
             return self.lf
-        else:
+        elif scope == "TF":
             return self.tf
+        else:
+            raise InterpreterError(element,
+                        IPPError.SYNTAX_ERROR, f"Unknown frame {scope}")
 
     def declareVariable(self, scope: str, name: str, element: Element):
         try:
-            self._getFrame(scope)[name] = (ArgumentType.NIL, None)
+            self._getFrame(scope, element)[name] = (ArgumentType.NIL, None)
         except:
             raise InterpreterError(element,
                                    IPPError.FRAME_DOES_NOT_EXIST, "Cannot get frame. Have you created one?")
 
     def setVariable(self, scope: str, name: str, datatype: ArgumentType, value, element: Element):
-        frame = self._getFrame(scope)
-        if name in frame:
+        try:
+            frame = self._getFrame(scope, element)
             frame[name] = (datatype, value)
-        else:
+        except KeyError:
             raise InterpreterError(element, IPPError.VARIABLE_DOES_NOT_EXIST,
-                                   f"Variable {name} was not declared before assignment")
-
+                                f"Variable {name} was not declared before assignment")
+        except (TypeError, AttributeError):
+            raise InterpreterError(element,
+                                   IPPError.FRAME_DOES_NOT_EXIST, f"Frame {scope} does not exist")  
+                                         
     def getVariable(self, scope: str, name: str, element: Element):
         try:
-            return self._getFrame(scope)[name]
-        except:
+            return self._getFrame(scope, element)[name]
+        except KeyError:
             raise InterpreterError(element,
                                    IPPError.VARIABLE_DOES_NOT_EXIST, f"Variable {name} was not declared")
+        except (TypeError, AttributeError):
+            raise InterpreterError(element,
+                                   IPPError.FRAME_DOES_NOT_EXIST, f"Frame {scope} does not exist")
+        
 
     def pushToStack(self, symbType: ArgumentType, symbValue):
         self.stack.append((symbType, symbValue))
@@ -420,7 +434,7 @@ class IPPInterpreter(object):
 
         try:
             ins: Instruction = self._compiledCode[instruction.order]
-            raise InterpreterError(instruction, IPPError.ILL_FORMED_XML,
+            raise InterpreterError(instruction, IPPError.SYNTAX_ERROR,
                                    f"Instruction with same order ({instruction.order}) already exists on line {ins.order}")
         except KeyError:
             pass
@@ -500,6 +514,12 @@ class IPPInterpreter(object):
                     except:
                         raise InterpreterError(
                             instruction, IPPError.VALUE_MISSING, "RETURN was called on empty call stack")
+                elif command == IPPInterpreterCommand.DEBUG:
+                    sys.stderr.write(f"Current position: {self.filename}:{self.lineNumber}\n")
+                    sys.stderr.write(f"Current opcode: {order[currentOrder]}\n")
+                    sys.stderr.write(f"Next opcode: {order[currentOrder]}\n")
+                    sys.stderr.write(f"Memory: {self.memory}\n")
+                    currentOrder += 1
                 else:
                     raise Exception(f"Invalid command type {command}")
             except InterpreterError as e:
@@ -507,16 +527,26 @@ class IPPInterpreter(object):
             except TypeError as e:
                 args = ", ".join([arg.type.name for arg in instruction.args])
                 raise InterpreterError(
-                    instruction, IPPError.SEMANTIC, f"Invalid number of arguments for {instruction.opcode}({args}).\n\tDetailed message: {e}")
+                    instruction, IPPError.SYNTAX_ERROR, f"Invalid number of arguments for {instruction.opcode}({args}).\n\tDetailed message: {e}")
 
     def interpret(self, instruction: Instruction):
         print(f"Interpreting: {instruction}")
         return self._instructions[instruction.opcode](self, *instruction.args)
 
 
+
+def isSequence(args):
+    nextExpectedNumber = 1
+    for arg in args:
+        order = arg.getOrder()
+        if order != nextExpectedNumber:
+            return False
+        nextExpectedNumber += 1
+    return True
+
 class IPPParser(xml.ContentHandler):
     elements = dict()
-    MAX_DEPTH = 3
+    MAX_DEPTH = 4
 
     def __init__(self, interpreter: IPPInterpreter, filename: str):
         super().__init__()
@@ -560,11 +590,16 @@ class IPPParser(xml.ContentHandler):
             elif elementEnum == Elements.INSTRUCTION:
                 self.args = list()
                 try:
+                    order = int(attrs["order"])
+
+                    if order <= 0:
+                        raise ValueError(attrs["order"])
+
                     self._stack.append(Instruction(self._filename,
                                                    self._locator.getLineNumber(),
                                                    self._locator.getColumnNumber(),
                                                    attrs["opcode"].upper(),
-                                                   int(attrs["order"])))
+                                                   order))
                 except KeyError:
                     self.raiseError(InterpreterError(
                         Element(
@@ -574,6 +609,16 @@ class IPPParser(xml.ContentHandler):
                             self._locator.getColumnNumber()),
                         IPPError.SYNTAX_ERROR,
                         "Instruction attribute is either missing opcode or order."))
+                except ValueError:
+                    order = attrs["order"]
+                    self.raiseError(InterpreterError(
+                        Element(
+                            self._filename,
+                            name,
+                            self._locator.getLineNumber(),
+                            self._locator.getColumnNumber()),
+                        IPPError.SYNTAX_ERROR,
+                        f"Invalid order value '{order}'"))
                 return
         except KeyError:
             if name.startswith(Elements.ARG.name):
@@ -589,8 +634,8 @@ class IPPParser(xml.ContentHandler):
                     name,
                     self._locator.getLineNumber(),
                     self._locator.getColumnNumber()),
-            IPPError.ILL_FORMED_XML,
-            f"Unknown element {name} on line"))
+            IPPError.SYNTAX_ERROR,
+            f"Unknown element {name}"))
 
     def endElement(self, name):
         name = name.upper()
@@ -634,8 +679,16 @@ class IPPParser(xml.ContentHandler):
                 else:
                     instruction: Instruction = self._stack.pop()
                     self.validateArgs(self.args)
-                    instruction.args = sorted(
-                        self.args, key=lambda x: x.getOrder())
+                    instruction.args = sorted(self.args, key=lambda x: x.getOrder())
+                    if not isSequence(instruction.args):
+                        self.raiseError(InterpreterError(
+                            Element(self._filename,
+                                    name,
+                                    self._locator.getLineNumber(),
+                                    self._locator.getColumnNumber()),
+                            IPPError.SYNTAX_ERROR,
+                            f"Args must be sequence starting from 1 to n"))
+
                     self.interpreter.compile(instruction)
                     return
         except KeyError as e:
@@ -715,11 +768,11 @@ def getSymbol(interpreter: IPPInterpreter, symb: Argument, expectedTypes):
             return (symbType, symbValue)
         else:
             types = ", ".join(t.name for t in expectedTypes)
-            raise InterpreterError(symb, IPPError.INVALID_VALUE_OF_OPERAND,
+            raise InterpreterError(symb, IPPError.INCOMPATIBLE_OPERANDS,
                                    f"Variable value ({symb}:{symbType}) is not compatible with following types: {types}")
     else:
         types = ", ".join(t.name for t in expectedTypes)
-        raise InterpreterError(symb, IPPError.INVALID_VALUE_OF_OPERAND,
+        raise InterpreterError(symb, IPPError.INCOMPATIBLE_OPERANDS,
                                f"Variable ({symb}) is not compatible with following types: {types}")
 
 
@@ -750,6 +803,9 @@ def move(interpreter: IPPInterpreter, instruction: Instruction, destination: Arg
 @Instruction.register
 def label(interpreter: IPPInterpreter, instruction: Instruction, var: Argument):
     expect(var, Argument.LABEL)
+    if var.value in interpreter._labels:
+        raise InterpreterError(instruction, IPPError.SEMANTIC, f"Duplicate label. First seen at {interpreter._labels[var.value][1]}")
+
     interpreter._labels[var.value] = (False, instruction.order)
 
 
@@ -767,15 +823,12 @@ def conditionalJump(interpreter: IPPInterpreter, instruction: Instruction, label
     (symb1Type, symb1Value) = getSymbol(interpreter, symb1, Argument.SYMB)
     (symb2Type, symb2Value) = getSymbol(interpreter, symb2, Argument.SYMB)
 
-    result = predicate(symb1Value, symb2Value)
+    result = predicate((symb1Type, symb1Value), (symb2Type, symb2Value))
 
-    if symb1Type == symb2Type and result:
+    if result:
         return (IPPInterpreterCommand.JUMP, {"label": label.value})
-    elif (symb1Type == symb2Type or symb1Type == ArgumentType.NIL or symb2Type == ArgumentType.NIL) and result:
-        return None
     else:
-        raise InterpreterError(
-            instruction, IPPError.INCOMPATIBLE_OPERANDS, f"Operands cannot be compared - {symb1Type} x {symb2Type}")
+        return None
 
 
 @Instruction.register
@@ -785,7 +838,19 @@ def clears(interpreter: IPPInterpreter, instruction: Instruction):
 
 @Instruction.register
 def jumpifeq(interpreter: IPPInterpreter, instruction: Instruction, label: Argument, symb1: Argument, symb2: Argument):
-    return conditionalJump(interpreter, instruction, label, symb1, symb2, lambda a, b: a == b)
+    def helper(a, b):
+        atype, avalue = a
+        btype, bvalue = b
+
+        if atype == btype and avalue == bvalue:
+            return True
+        elif atype == btype or atype == ArgumentType.NIL or btype == ArgumentType.NIL:
+            return False
+        else:
+            raise InterpreterError(
+                instruction, IPPError.INCOMPATIBLE_OPERANDS, f"Operands cannot be compared - {atype} x {btype}")
+
+    return conditionalJump(interpreter, instruction, label, symb1, symb2, helper)
 
 
 @Instruction.register
@@ -797,8 +862,19 @@ def jumpifeqs(interpreter: IPPInterpreter, instruction: Instruction, label: Argu
 
 @Instruction.register
 def jumpifneq(interpreter: IPPInterpreter, instruction: Instruction, label: Argument, symb1: Argument, symb2: Argument):
-    return conditionalJump(interpreter, instruction, label, symb1, symb2, lambda a, b: a != b)
+    def helper(a, b):
+        atype, avalue = a
+        btype, bvalue = b
 
+        if (atype == btype and avalue != bvalue) or atype == ArgumentType.NIL or btype == ArgumentType.NIL:
+            return True
+        elif atype == btype and avalue == bvalue:
+            return False
+        else:
+            raise InterpreterError(
+                instruction, IPPError.INCOMPATIBLE_OPERANDS, f"Operands cannot be compared - {atype} x {btype}")
+
+    return conditionalJump(interpreter, instruction, label, symb1, symb2, helper)
 
 @Instruction.register
 def jumpifneqs(interpreter: IPPInterpreter, instruction: Instruction, label: Argument):
@@ -837,8 +913,10 @@ def call(interpreter, instruction: Instruction, label: Argument):
 @Instruction.register
 def exit(interpreter, instruction: Instruction, status: Argument):
     expectType(status, {ArgumentType.INT})
-    raise ProgramExit(int(status.value))
-
+    if 0 <= status.value <= 49:
+        raise ProgramExit(status.value)
+    else:
+        raise InterpreterError(instruction, IPPError.INVALID_VALUE_OF_OPERAND, f"Exit code out of range. Must be between 0 and 49. Got {status.value}")
 
 @Instruction.register(name="return")
 def i_return(interpreter, instruction: Instruction):
@@ -1026,8 +1104,7 @@ def divs(interpreter: IPPInterpreter, instruction: Instruction):
     symb1 = Argument.fromStack(interpreter.memory.popFromStack(instruction))
     div(interpreter, instruction, None, symb1, symb2)
 
-
-def relationOperator(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument, symb2: Argument, operator):
+def relationOperator(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument, symb2: Argument, operator, supportsNil = False):
     if var != None:
         expect(var, Argument.VARS)
     expect(symb1, Argument.SYMB)
@@ -1038,7 +1115,7 @@ def relationOperator(interpreter: IPPInterpreter, instruction: Instruction, var:
         btype, bvalue = b
         if atype == btype:
             return (ArgumentType.BOOL, operator(avalue, bvalue))
-        elif atype == ArgumentType.NIL or btype == ArgumentType.NIL:
+        elif (atype == ArgumentType.NIL or btype == ArgumentType.NIL) and supportsNil:
             return (ArgumentType.BOOL, False)
         else:
             raise InterpreterError(
@@ -1080,7 +1157,7 @@ def gts(interpreter: IPPInterpreter, instruction: Instruction):
 @Instruction.register
 def eq(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument, symb2: Argument):
     relationOperator(interpreter, instruction, var,
-                     symb1, symb2, lambda a, b: a == b)
+                     symb1, symb2, lambda a, b: a == b, True)
 
 
 @Instruction.register
@@ -1092,7 +1169,8 @@ def eqs(interpreter: IPPInterpreter, instruction: Instruction):
 
 @Instruction.register(name="and")
 def i_and(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument, symb2: Argument):
-    expect(var, Argument.VARS)
+    if var:
+        expect(var, Argument.VARS)
     expect(symb1, Argument.SYMB)
     expect(symb2, Argument.SYMB)
 
@@ -1100,7 +1178,7 @@ def i_and(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, 
                    [
                        ({ArgumentType.BOOL}, symb1),
                        ({ArgumentType.BOOL}, symb2)
-                   ], lambda a, b: (ArgumentType.BOOL, a and b))
+                   ], lambda a, b: (ArgumentType.BOOL, a[1] and b[1]))
 
 
 @Instruction.register
@@ -1112,7 +1190,8 @@ def ands(interpreter: IPPInterpreter, instruction: Instruction):
 
 @Instruction.register(name="or")
 def i_or(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument, symb2: Argument):
-    expect(var, Argument.VARS)
+    if var:
+        expect(var, Argument.VARS)
     expect(symb1, Argument.SYMB)
     expect(symb2, Argument.SYMB)
 
@@ -1120,7 +1199,7 @@ def i_or(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, s
                    [
                        ({ArgumentType.BOOL}, symb1),
                        ({ArgumentType.BOOL}, symb2)
-                   ], lambda a, b: (ArgumentType.BOOL, a or b))
+                   ], lambda a, b: (ArgumentType.BOOL, a[1] or b[1]))
 
 
 @Instruction.register
@@ -1132,13 +1211,14 @@ def ors(interpreter: IPPInterpreter, instruction: Instruction):
 
 @Instruction.register(name="not")
 def i_not(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument):
-    expect(var, Argument.VARS)
+    if var:
+        expect(var, Argument.VARS)
     expect(symb1, Argument.SYMB)
 
     binaryOperator(interpreter, instruction, var,
                    [
                        ({ArgumentType.BOOL}, symb1),
-                   ], lambda a: (ArgumentType.BOOL, not a))
+                   ], lambda a: (ArgumentType.BOOL, not a[1]))
 
 
 @Instruction.register
@@ -1149,7 +1229,8 @@ def nots(interpreter: IPPInterpreter, instruction: Instruction):
 
 @Instruction.register
 def int2char(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument):
-    expect(var, Argument.VARS)
+    if var:
+        expect(var, Argument.VARS)
     expect(symb1, Argument.SYMB)
 
     def helper(ch):
@@ -1173,7 +1254,8 @@ def int2chars(interpreter: IPPInterpreter, instruction: Instruction):
 
 @Instruction.register
 def stri2int(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb1: Argument, symb2: Argument):
-    expect(var, Argument.VARS)
+    if var:
+        expect(var, Argument.VARS)
     expect(symb1, Argument.SYMB)
     expect(symb2, Argument.SYMB)
 
@@ -1245,15 +1327,20 @@ def i_read(interpreter: IPPInterpreter, instruction: Instruction, var: Argument,
 
     try:
         content = input()
+        inputType, inputValue = None, None
 
-        (tipe, value) = parseToTokens(arg.value, content, instruction)
+        if arg.value == ArgumentType.STRING:
+            inputType = ArgumentType.STRING
+            inputValue = content
+        else:
+            inputType, inputValue = parseToTokens(arg.value, content, instruction)
 
-        if tipe not in {ArgumentType.STRING, ArgumentType.BOOL, ArgumentType.INT, ArgumentType.FLOAT}:
+        if inputType not in {ArgumentType.STRING, ArgumentType.BOOL, ArgumentType.INT, ArgumentType.FLOAT}:
             raise InterpreterError(arg, IPPError.INVALID_VALUE_OF_OPERAND,
                                    "Read only support types {string, bool, int, float}")
 
         interpreter.memory.setVariable(
-            var.scope, var.value, tipe, value, value)
+            var.scope, var.value, inputType, inputValue, instruction)
     except EOFError:
         interpreter.memory.setVariable(
             var.scope, var.value, ArgumentType.NIL, "nil", var)
@@ -1405,6 +1492,15 @@ def i_type(interpreter: IPPInterpreter, instruction: Instruction, var: Argument,
         var
     )
 
+@Instruction.register
+def dprint(interpreter: IPPInterpreter, instruction: Instruction, symb: Argument):
+    (_, value) = getSymbol(interpreter, symb, Argument.SYMB)
+    sys.stderr.write(f"{value}\n")
+
+@Instruction.register(name="break")
+def i_break(interpreter: IPPInterpreter, instruction: Instruction):
+    return (IPPInterpreterCommand.DEBUG, {})
+
 class Args(object):
     def __init__(self, args):
         super().__init__()
@@ -1421,7 +1517,7 @@ class Args(object):
 
         name, value = (arg[2:index], arg[index+1:]) if index > 0 else (arg[2:], True)
 
-        if value.startswith("\"") and value.endswith("\""):
+        if isinstance(value, str) and  value.startswith("\"") and value.endswith("\""):
             value = value[1:len(value) - 1]
 
         return (name, value)
@@ -1472,9 +1568,9 @@ class Args(object):
 
 def main():
     try:
-        args = Args(sys.argv[1:])
         source = sys.stdin
         stdin = sys.stdin
+        args = Args(sys.argv[1:])
         sourceFilename = "-"
 
         if "help" in args:
@@ -1530,7 +1626,6 @@ def main():
     except ProgramExit as e:
         sys.exit(e.status)
     except InterpreterError as e:
-        raise e
         sys.stderr.write(str(e) + "\n")
         sys.stderr.write(f"Error status: {e.status}\n")
         sys.exit(e.status)
@@ -1542,6 +1637,10 @@ def main():
         sys.stderr.write(str(e) + "\n")
         sys.stderr.write(f"Error status: {IPPError.FILE_OPEN}\n")
         sys.exit(IPPError.FILE_OPEN)
+    except xml.SAXException as e:
+        sys.stderr.write(str(e) + "\n")
+        sys.stderr.write(f"Error status: {IPPError.FILE_OPEN}\n")
+        sys.exit(IPPError.ILL_FORMED_XML)
     finally:
         if source and source != sys.stdin and not isinstance(source, str):
             source.close()

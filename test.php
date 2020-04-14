@@ -214,7 +214,7 @@ function diffFiles($expectedOutputFile, $actualOutputFile)
 {
     $expectedFile = false;
     $outputFile = false;
-    if($expectedFile = fopen($expectedOutputFile, "r") && $outputFile = fopen($actualOutputFile, "r")) {
+    if(($expectedFile = fopen($expectedOutputFile, "r")) && ($outputFile = fopen($actualOutputFile, "r"))) {
         while (true) {
             $line1 = fgets($expectedFile);
             $line2 = fgets($outputFile);
@@ -274,19 +274,22 @@ class TestCase {
     public function prepareFiles()
     {
         if ($this->rc === null || !file_exists($this->rc)) {
-            if ($f = fopen($this->getFileNameFor("rc"), "w")) {
+            $this->rc = $this->getFileNameFor("rc");
+            if ($f = fopen($this->rc, "w")) {
                 fprintf($f, "%d\n", 0);
                 fclose($f);
             }
             else {
-                throw new TestError(TestError::FILE_OUT_OPEN, "Could not create RC file {$this->getFileNameFor("rc")}");
+                throw new TestError(TestError::FILE_OUT_OPEN, "Could not create RC file $this->rc");
             }
         }
         if ($this->out === null || !file_exists($this->out)) {
-            touch($this->getFileNameFor("out"));
+            $this->out = $this->getFileNameFor("out");
+            touch($this->out);
         }
         if ($this->in === null || !file_exists($this->in)) {
-            touch($this->getFileNameFor("in"));
+            $this->in = $this->getFileNameFor("in");
+            touch($this->in);
         }
     }
 
@@ -334,7 +337,13 @@ class TestCase {
         }
         else {
             unlink($file);
-            return $rc === $this->getRc();
+            if ($rc === $this->getRc()) {
+                return true;
+            }
+            else {
+                fprintf(STDERR, "Incorrect return code. Expecting {$this->getRc()}. Got $rc\n");
+                return false;
+            }
         }
     }
 
@@ -351,7 +360,13 @@ class TestCase {
         }
         else {
             unlink($file);
-            return $rc === $this->getRc();
+            if ($rc === $this->getRc()) {
+                return true;
+            }
+            else {
+                fprintf(STDERR, "Incorrect return code. Expecting {$this->getRc()}. Got $rc\n");
+                return false;
+            }
         }
     }
 
@@ -377,7 +392,13 @@ class TestCase {
         else {
             unlink($xml);
             unlink($programOutputFile);
-            return $rc === $this->getRc();
+            if ($rc === $this->getRc()) {
+                return true;
+            }
+            else {
+                fprintf(STDERR, "Incorrect return code. Expecting {$this->getRc()}. Got $rc\n");
+                return false;
+            }
         }
     }
 }
@@ -479,6 +500,10 @@ function main()
         $intScript = getFile($args, "int-script", false);
         $jexamxml = getFile($args, "jexamxml", function() { return findFileInCwd("jexamxml.jar"); });
         
+        if (!is_dir($directory)) {
+            throw new TestError(TestError::FILE_OPEN, "--directory does not point to directory");
+        }
+
         $testFn = null;
         $errors = array();
 
@@ -522,6 +547,7 @@ function main()
         $groupedFiles = groupFiles(walk($directory, $recursive));
 
         foreach ($groupedFiles as $testCase) {
+            $testCase->prepareFiles();
             $result = $testFn($testCase);
             if ($result === true) {
                 $passed++;
