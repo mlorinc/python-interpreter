@@ -828,14 +828,14 @@ function main()
     while (($line = fgets(STDIN)) !== false) {
         $instruction = Instruction::from($line, $stats);
         if ($instruction === null) {
-            fprintf(STDERR, "Skipping line: $line\n");
+            // fprintf(STDERR, "Skipping line: $line\n");
         } else {
-            print("<instruction order=\"$counter\" opcode=\"{$instruction->getName()}\">\n");
+            print("\t<instruction order=\"$counter\" opcode=\"{$instruction->getName()}\">\n");
             foreach ($instruction->getArguments() as $index => $arg) {
                 $node = $arg->renderNode($index + 1);
-                print("$node\n");
+                print("\t\t$node");
             }
-            print("</instruction>");
+            print("\t</instruction>\n");
             $counter++;
         }
     }

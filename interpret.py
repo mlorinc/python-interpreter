@@ -4,6 +4,8 @@ import re
 import sys
 import xml.sax as xml
 
+variableRegex = re.compile(r"^[a-z_\-\$&%\*!\?][a-z0-9_\-\$&%\*!\?]*$", re.IGNORECASE)
+
 
 class ILogger(ABC):
     @abstractmethod
@@ -143,6 +145,7 @@ class ArgumentType(Enum):
     STRING = 5
     TYPE = 6
     FLOAT = 7
+    UNINITIALIZED = 8
 
 
 def tryParseVar(value, scope):
@@ -199,7 +202,7 @@ def parseToTokens(tipe: ArgumentType, value: str, element: Element):
     if tipe == ArgumentType.INT:
         try:
             if value[:1] == "00":
-                raise Exception()
+                raise InterpreterError(element, IPPError.SYNTAX_ERROR, f"Invalid integer {value}")
 
             value = int(value)
         except:
@@ -222,8 +225,9 @@ def parseToTokens(tipe: ArgumentType, value: str, element: Element):
                 element, IPPError.SYNTAX_ERROR, f"Invalid boolean: {value}")
 
     elif tipe == ArgumentType.LABEL:
-        # TODO: add check
-        pass
+        if not variableRegex.match(value):
+            raise InterpreterError(
+                element, IPPError.SYNTAX_ERROR, f"Invalid label: {value}") 
 
     elif tipe == ArgumentType.NIL:
         if value == "nil":
@@ -235,6 +239,9 @@ def parseToTokens(tipe: ArgumentType, value: str, element: Element):
         try:
             value = next(var for var in [tryParseVar(value, "GF"), tryParseVar(
                 value, "LF"), tryParseVar(value, "TF")] if var is not None)
+
+            if not variableRegex.match(value[1]):
+                raise InterpreterError(element, IPPError.SYNTAX_ERROR, f"Invalid variable name: {value[1]}")
         except StopIteration:
             raise InterpreterError(
                 element, IPPError.SYNTAX_ERROR, f"Invalid variable {value}")
@@ -375,7 +382,7 @@ class Memory(object):
 
     def declareVariable(self, scope: str, name: str, element: Element):
         try:
-            self._getFrame(scope, element)[name] = (ArgumentType.NIL, None)
+            self._getFrame(scope, element)[name] = (ArgumentType.UNINITIALIZED, None)
         except:
             raise InterpreterError(element,
                                    IPPError.FRAME_DOES_NOT_EXIST, "Cannot get frame. Have you created one?")
@@ -383,6 +390,10 @@ class Memory(object):
     def setVariable(self, scope: str, name: str, datatype: ArgumentType, value, element: Element):
         try:
             frame = self._getFrame(scope, element)
+
+            if name not in frame:
+                raise KeyError()
+
             frame[name] = (datatype, value)
         except KeyError:
             raise InterpreterError(element, IPPError.VARIABLE_DOES_NOT_EXIST,
@@ -393,7 +404,13 @@ class Memory(object):
                                          
     def getVariable(self, scope: str, name: str, element: Element):
         try:
-            return self._getFrame(scope, element)[name]
+            variableType, variableValue = self._getFrame(scope, element)[name]
+
+            if variableType == ArgumentType.UNINITIALIZED:
+                raise InterpreterError(element,
+                        IPPError.VALUE_MISSING, f"Variable is not initialzed therefore cannot be used. Variable name: {scope}@{name}")
+            else:
+                return (variableType, variableValue)
         except KeyError:
             raise InterpreterError(element,
                                    IPPError.VARIABLE_DOES_NOT_EXIST, f"Variable {name} was not declared")
@@ -528,11 +545,6 @@ class IPPInterpreter(object):
                 args = ", ".join([arg.type.name for arg in instruction.args])
                 raise InterpreterError(
                     instruction, IPPError.SYNTAX_ERROR, f"Invalid number of arguments for {instruction.opcode}({args}).\n\tDetailed message: {e}")
-
-    def interpret(self, instruction: Instruction):
-        print(f"Interpreting: {instruction}")
-        return self._instructions[instruction.opcode](self, *instruction.args)
-
 
 
 def isSequence(args):
@@ -731,8 +743,8 @@ class IPPParser(xml.ContentHandler):
         if parentElement.name.startswith(Elements.ARG.name):
             parentElement.value += content
         elif content.strip():
-            raise Exception(
-                f"Invalid chars in {parentElement} tag. Characters: {content}")
+            raise InterpreterError(parentElement, IPPError.ILL_FORMED_XML,
+                f"Invalid characters: {content}")
 
     def validateArgs(self, args):
         orders = map(lambda x: x.getOrder(), args)
@@ -926,8 +938,14 @@ def i_return(interpreter, instruction: Instruction):
 @Instruction.register
 def pushs(interpreter: IPPInterpreter, instruction: Instruction, symb: Argument):
     expectType(symb, Argument.SYMB)
-    interpreter.memory.pushToStack(
-        *getSymbol(interpreter, symb, Argument.SYMB))
+
+    symbType, symbValue = getSymbol(interpreter, symb, Argument.SYMB)
+
+    if symbType == ArgumentType.UNINITIALIZED:
+        raise InterpreterError(symb,
+                IPPError.VALUE_MISSING, f"Variable is not initialzed therefore cannot be used. Variable name: {symb.scope}@{symb.value}")
+
+    interpreter.memory.pushToStack(symbType, symbValue)
 
 @Instruction.register
 def pops(interpreter: IPPInterpreter, instruction: Instruction, var: Argument):
@@ -973,6 +991,9 @@ def add(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, sy
     expect(symb2, Argument.SYMB)
 
     def helper(a, b):
+        if a[0] != b[0]:
+            raise InterpreterError(instruction, IPPError.INCOMPATIBLE_OPERANDS, f"{a[0]} + {b[0]} is not possible")
+
         result = a[1] + b[1]
         datatype = ArgumentType.INT if isinstance(
             result, int) else ArgumentType.FLOAT
@@ -1001,6 +1022,8 @@ def sub(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, sy
     expect(symb2, Argument.SYMB)
 
     def helper(a, b):
+        if a[0] != b[0]:
+            raise InterpreterError(instruction, IPPError.INCOMPATIBLE_OPERANDS, f"{a[0]} - {b[0]} is not possible")
         result = a[1] - b[1]
         datatype = ArgumentType.INT if isinstance(
             result, int) else ArgumentType.FLOAT
@@ -1029,6 +1052,8 @@ def mul(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, sy
     expect(symb2, Argument.SYMB)
 
     def helper(a, b):
+        if a[0] != b[0]:
+            raise InterpreterError(instruction, IPPError.INCOMPATIBLE_OPERANDS, f"{a[0]} * {b[0]} is not possible")
         result = a[1] * b[1]
         datatype = ArgumentType.INT if isinstance(
             result, int) else ArgumentType.FLOAT
@@ -1085,6 +1110,8 @@ def div(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, sy
     expect(symb2, Argument.SYMB)
 
     def helper(a, b):
+        if a[0] != b[0]:
+            raise InterpreterError(instruction, IPPError.INCOMPATIBLE_OPERANDS, f"{a[0]} / {b[0]} is not possible")
         if b[1] != 0:
             return (ArgumentType.FLOAT, a[1] / b[1])
         else:
@@ -1304,20 +1331,20 @@ def convert2type(interpreter: IPPInterpreter, instruction: Instruction, var: Arg
 @Instruction.register
 def int2float(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb: Argument):
     convert2type(interpreter, instruction, var, symb,
-                 ArgumentType.FLOAT, {ArgumentType.INT}, int)
+                 ArgumentType.FLOAT, {ArgumentType.INT}, float)
 
 
 @Instruction.register
 def int2floats(interpreter: IPPInterpreter, instruction: Instruction):
     symb = Argument.fromStack(interpreter.memory.popFromStack(instruction))
     convert2type(interpreter, instruction, None, symb,
-                 ArgumentType.FLOAT, {ArgumentType.INT}, int)
+                 ArgumentType.FLOAT, {ArgumentType.INT}, float)
 
 
 @Instruction.register
 def float2int(interpreter: IPPInterpreter, instruction: Instruction, var: Argument, symb: Argument):
     convert2type(interpreter, instruction, var, symb,
-                 ArgumentType.INT, {ArgumentType.FLOAT}, float)
+                 ArgumentType.INT, {ArgumentType.FLOAT}, int)
 
 
 @Instruction.register(name="read")
@@ -1472,7 +1499,7 @@ def i_type(interpreter: IPPInterpreter, instruction: Instruction, var: Argument,
     try:
         (symbType, _) = getSymbol(interpreter, symb, Argument.SYMB)
     except InterpreterError as e:
-        if e.status == IPPError.VARIABLE_DOES_NOT_EXIST:
+        if e.status == IPPError.VALUE_MISSING:
             interpreter.memory.setVariable(
                 var.scope,
                 var.value,
@@ -1639,7 +1666,7 @@ def main():
         sys.exit(IPPError.FILE_OPEN)
     except xml.SAXException as e:
         sys.stderr.write(str(e) + "\n")
-        sys.stderr.write(f"Error status: {IPPError.FILE_OPEN}\n")
+        sys.stderr.write(f"Error status: {IPPError.ILL_FORMED_XML}\n")
         sys.exit(IPPError.ILL_FORMED_XML)
     finally:
         if source and source != sys.stdin and not isinstance(source, str):

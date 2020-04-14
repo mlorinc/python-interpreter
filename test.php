@@ -17,37 +17,42 @@ class TestError extends Error
     }
 }
 
-class MissingValueError extends TestError {
-
+class MissingValueError extends TestError
+{
 }
 
-function insertIntoSet(&$array, $value) {
+function insertIntoSet(&$array, $value)
+{
     if (array_search($value, $array) === false) {
         array_push($array, $value);
     }
 }
 
-class Args implements Countable {
+class Args implements Countable
+{
     private $args;
     private $usedArgs;
 
-    function __construct($args) {
+    function __construct($args)
+    {
         $this->args = $this->parseArgs($args);
         $this->usedArgs = array();
     }
 
-    private function parseArg($arg) {
+    private function parseArg($arg)
+    {
         $arg = trim($arg);
         $index = strpos($arg, "=");
-    
-        if($arg === "" || substr($arg, 0, 2) !== "--") {
+
+        if ($arg === "" || substr($arg, 0, 2) !== "--") {
             throw new TestError(TestError::MISSING_PARAM, "Invalid argument $arg");
         }
-    
+
         return $index > 0 ? array(substr($arg, 2, $index - 2), substr($arg, $index + 1)) : array(substr($arg, 2), true);
     }
 
-    private function parseArgs($args) {
+    private function parseArgs($args)
+    {
         $argsDict = array();
 
         foreach ($args as $arg) {
@@ -62,21 +67,21 @@ class Args implements Countable {
         return $argsDict;
     }
 
-    public function getSingleOrDefault($key, $default) {
+    public function getSingleOrDefault($key, $default)
+    {
         try {
             return $this->getSingle($key);
-        }
-        catch(TestError $e) {
+        } catch (TestError $e) {
             if (!is_callable($default)) {
                 return $default;
-            }
-            else {
+            } else {
                 return $default();
             }
         }
     }
 
-    public function getSingle($key) {
+    public function getSingle($key)
+    {
         try {
             insertIntoSet($this->usedArgs, $key);
             $args = $this->args[$key];
@@ -89,13 +94,13 @@ class Args implements Countable {
                 throw new TestError(TestError::MISSING_PARAM, "Argument '$key' must be unique");
             }
             return $args[0];
-        }
-        catch(Error $e) {
+        } catch (Error $e) {
             throw new TestError(TestError::MISSING_PARAM, "Arguments '$key' were not provided $e");
         }
     }
 
-    public function getAll($key) {
+    public function getAll($key)
+    {
         try {
             insertIntoSet($this->usedArgs, $key);
             $args = $this->args[$key];
@@ -105,17 +110,18 @@ class Args implements Countable {
             }
 
             return $args;
-        }
-        catch (Error $e) {
+        } catch (Error $e) {
             throw new TestError(TestError::MISSING_PARAM, "Arguments '$key' were not provided $e");
         }
     }
 
-    public function usedAllArguments() {
+    public function usedAllArguments()
+    {
         return count($this->usedArgs) == count($this->args);
     }
 
-    public function getUnusedArguments() {
+    public function getUnusedArguments()
+    {
         $unusedArgs = array();
 
         foreach ($this->args as $key => $args) {
@@ -126,54 +132,53 @@ class Args implements Countable {
         return $unusedArgs;
     }
 
-    public function hasArg($key){
+    public function hasArg($key)
+    {
         return array_key_exists($key, $this->args);
     }
-    public function count() {
+    public function count()
+    {
         return count($this->args);
     }
-        
+
     public function __toString()
     {
         return  $this->args;
     }
 }
 
-function findFileInCwd($filename) {
+function findFileInCwd($filename)
+{
     $cwd = getcwd();
 
     if ($cwd !== false) {
         return $filename ? $cwd . DIRECTORY_SEPARATOR . $filename : $cwd;
-    }
-    else {
+    } else {
         throw new TestError(TestError::FILE_OPEN, "Could not get current working directory");
     }
 }
 
-function getFile($args, $key, $default) {
+function getFile($args, $key, $default)
+{
     try {
         $dir = $args->getSingle($key);
 
         if ($dir !== true) {
             return $dir;
-        }
-        else {
+        } else {
             throw new MissingValueError(TestError::MISSING_PARAM, "--$key=file is missing value");
         }
-    }
-    catch (TestError $e) {
+    } catch (TestError $e) {
         if ($default === null) {
             throw new MissingValueError(TestError::MISSING_PARAM, "Required argument --$key is missing");
         }
 
         if (is_callable($default)) {
             return $default($key);
-        }
-        else {
+        } else {
             return $default;
         }
-    }
-    catch(MissingValueError $e) {
+    } catch (MissingValueError $e) {
         throw $e;
     }
 }
@@ -192,19 +197,19 @@ function walk($file, $recursive = false)
         if (is_dir($filename)) {
             if (!$recursive && !$started) {
                 $started = true;
-            }
-            else if (!$recursive && $started) {
+            } else if (!$recursive && $started) {
                 continue;
             }
 
-            $filteredFiles = array_filter(scandir($filename), function($filename) {
+            $filteredFiles = array_filter(scandir($filename), function ($filename) {
                 return $filename !== "." && $filename !== "..";
             });
 
-            $absolutePathFiles = array_map(function ($f) use(&$filename) { return $filename . DIRECTORY_SEPARATOR . $f; } , $filteredFiles);
+            $absolutePathFiles = array_map(function ($f) use (&$filename) {
+                return $filename . DIRECTORY_SEPARATOR . $f;
+            }, $filteredFiles);
             array_push($fileStack, ...$absolutePathFiles);
-        }
-        else {
+        } else {
             yield $filename;
         }
     }
@@ -214,7 +219,7 @@ function diffFiles($expectedOutputFile, $actualOutputFile)
 {
     $expectedFile = false;
     $outputFile = false;
-    if(($expectedFile = fopen($expectedOutputFile, "r")) && ($outputFile = fopen($actualOutputFile, "r"))) {
+    if (($expectedFile = fopen($expectedOutputFile, "r")) && ($outputFile = fopen($actualOutputFile, "r"))) {
         while (true) {
             $line1 = fgets($expectedFile);
             $line2 = fgets($outputFile);
@@ -230,24 +235,24 @@ function diffFiles($expectedOutputFile, $actualOutputFile)
                 return true;
             }
         }
-    }
-    else {
+    } else {
         if ($expectedFile) {
             fclose($expectedFile);
             throw new TestError(TestError::FILE_OPEN, "Could not open file $actualOutputFile");
-        }
-        else {
+        } else {
             throw new TestError(TestError::FILE_OPEN, "Could not open file $expectedOutputFile");
         }
     }
 }
 
-class TestCase {
+class TestCase
+{
     public $in;
     public $src;
     public $out;
     public $rc;
     public $name;
+    public $scriptRC;
     private $cachedRc = null;
 
     public function __construct($name)
@@ -259,15 +264,18 @@ class TestCase {
         $this->name = $name;
     }
 
-    private function getFileNameFor($extension) {
+    private function getFileNameFor($extension)
+    {
         return dirname($this->name) . DIRECTORY_SEPARATOR . basename($this->name) . ".$extension";
     }
 
-    public function isValid() {
+    public function isValid()
+    {
         return $this->name !== null && $this->src !== null;
     }
 
-    public function __toString() {
+    public function __toString()
+    {
         return "TestCase(name='$this->name', in='$this->in', src='$this->src', out='$this->out', rc='$this->rc')";
     }
 
@@ -278,8 +286,7 @@ class TestCase {
             if ($f = fopen($this->rc, "w")) {
                 fprintf($f, "%d\n", 0);
                 fclose($f);
-            }
-            else {
+            } else {
                 throw new TestError(TestError::FILE_OUT_OPEN, "Could not create RC file $this->rc");
             }
         }
@@ -304,20 +311,21 @@ class TestCase {
             fscanf($f, "%d", $rc);
             $this->cachedRc = $rc;
             return $rc;
-        }
-        else {
+        } else {
             throw new TestError(TestError::FILE_OUT_OPEN, "Could not get RC from file {$this->getFileNameFor("rc")}");
         }
     }
 
-    public function parse($php, $parseScript, $sourceFile, $outputFile) {
+    public function parse($php, $parseScript, $sourceFile, $outputFile)
+    {
         $rc = -1;
         $out = null;
         exec("$php $parseScript < $sourceFile > " . $outputFile, $out, $rc);
         return $rc;
     }
 
-    public function interpret($python, $intScript, $sourceFile, $inputFile, $outputFile) {
+    public function interpret($python, $intScript, $sourceFile, $inputFile, $outputFile)
+    {
         $rc = -1;
         exec("$python $intScript --source=\"$sourceFile\" --input=\"$inputFile\" > " . $outputFile, $out, $rc);
         return $rc;
@@ -329,18 +337,17 @@ class TestCase {
         $expectedOutput = $this->out;
         $rc = $this->parse($php, $parseScript, $this->src, $file);
 
+        $this->scriptRC = $rc;
         if ($rc === 0 && $this->getRc() === 0) {
             $out = null;
             exec("java -jar $jar \"$file\" \"$expectedOutput\" options", $out, $rc);
             unlink($file);
             return $rc === 0;
-        }
-        else {
+        } else {
             unlink($file);
             if ($rc === $this->getRc()) {
                 return true;
-            }
-            else {
+            } else {
                 fprintf(STDERR, "Incorrect return code. Expecting {$this->getRc()}. Got $rc\n");
                 return false;
             }
@@ -353,17 +360,16 @@ class TestCase {
         $expectedOutput = $this->out;
         $rc = $this->interpret($python, $intScript, $this->src, $this->in, $file);
 
+        $this->scriptRC = $rc;
         if ($rc === 0 && $this->getRc() === 0) {
             $result = diffFiles($expectedOutput, $file);
             unlink($file);
             return $result;
-        }
-        else {
+        } else {
             unlink($file);
             if ($rc === $this->getRc()) {
                 return true;
-            }
-            else {
+            } else {
                 fprintf(STDERR, "Incorrect return code. Expecting {$this->getRc()}. Got $rc\n");
                 return false;
             }
@@ -383,19 +389,18 @@ class TestCase {
 
         $rc = $this->interpret($python, $intScript, $xml, $this->in, $programOutputFile);
 
+        $this->scriptRC = $rc;
         if ($rc === 0 && $this->getRc() === 0) {
             $result = diffFiles($this->out, $programOutputFile);
             unlink($xml);
             unlink($programOutputFile);
             return $result;
-        }
-        else {
+        } else {
             unlink($xml);
             unlink($programOutputFile);
             if ($rc === $this->getRc()) {
                 return true;
-            }
-            else {
+            } else {
                 fprintf(STDERR, "Incorrect return code. Expecting {$this->getRc()}. Got $rc\n");
                 return false;
             }
@@ -408,11 +413,12 @@ function getTestName($file)
     return dirname($file) . DIRECTORY_SEPARATOR . pathinfo($file, PATHINFO_FILENAME);
 }
 
-function groupFiles($generator) {
+function groupFiles($generator)
+{
     $currentTestCase = new TestCase(null);
     foreach ($generator as $file) {
         $testName = getTestName($file);
-        
+
         if ($testName != $currentTestCase->name) {
             if ($currentTestCase->isValid()) {
                 yield $currentTestCase;
@@ -430,10 +436,10 @@ function groupFiles($generator) {
                 break;
             case "rc":
                 $currentTestCase->rc = $file;
-                break;  
+                break;
             case "in":
                 $currentTestCase->in = $file;
-                break;  
+                break;
             default:
                 // ignore file
                 break;
@@ -446,21 +452,21 @@ function groupFiles($generator) {
 
 function parseOnlyTest($parseScript, $jexamxml)
 {
-    return function($testCase) use($parseScript, $jexamxml) {
+    return function ($testCase) use ($parseScript, $jexamxml) {
         return $testCase->compareParseOnly("php7.4", $jexamxml, $parseScript);
     };
 }
 
 function intOnlyTest($intScript)
 {
-    return function($testCase) use($intScript) {
+    return function ($testCase) use ($intScript) {
         return $testCase->compareIntOnly("python3.8", $intScript);
     };
 }
 
 function bothTest($parseScript, $intScript)
 {
-    return function($testCase) use($parseScript, $intScript) {
+    return function ($testCase) use ($parseScript, $intScript) {
         return $testCase->compare("php7.4", $parseScript, "python3.8", $intScript);
     };
 }
@@ -486,20 +492,23 @@ function main()
                 print("\t--int-only - test interpreter only\n");
                 print("\t--jexamxml=file - path to jexamxml.jar. Can be used only with --parse-only\n");
                 exit(0);
-            }
-            else {
+            } else {
                 throw new TestError(TestError::MISSING_PARAM, "Cannot combine help argument with other arguments");
             }
         }
 
-        $directory = getFile($args, "directory", function() { return findFileInCwd(null); });
+        $directory = getFile($args, "directory", function () {
+            return findFileInCwd(null);
+        });
         $recursive = $args->getSingleOrDefault("recursive", false);
         $parseOnly = $args->getSingleOrDefault("parse-only", false);
         $intOnly = $args->getSingleOrDefault("int-only", false);
         $parseScript = getFile($args, "parse-script", false);
         $intScript = getFile($args, "int-script", false);
-        $jexamxml = getFile($args, "jexamxml", function() { return findFileInCwd("jexamxml.jar"); });
-        
+        $jexamxml = getFile($args, "jexamxml", function () {
+            return findFileInCwd("jexamxml.jar");
+        });
+
         if (!is_dir($directory)) {
             throw new TestError(TestError::FILE_OPEN, "--directory does not point to directory");
         }
@@ -515,11 +524,12 @@ function main()
                 array_push($errors, "--int-only cannot be combine with --parse-script");
             }
             if (count($errors) === 0) {
-                $intScript = getFile($args, "int-script", function() { return findFileInCwd("interpret.py"); });
+                $intScript = getFile($args, "int-script", function () {
+                    return findFileInCwd("interpret.py");
+                });
                 $testFn = intOnlyTest($intScript);
             }
-        }
-        else if ($parseOnly) {
+        } else if ($parseOnly) {
             if ($intOnly) {
                 array_push($errors, "--parse-only cannot be combine with --int-only");
             }
@@ -527,13 +537,18 @@ function main()
                 array_push($errors, "--parse-only cannot be combine with --int-script");
             }
             if (count($errors) === 0) {
-                $parseScript = getFile($args, "parse-script", function() { return findFileInCwd("parse.php"); });
+                $parseScript = getFile($args, "parse-script", function () {
+                    return findFileInCwd("parse.php");
+                });
                 $testFn = parseOnlyTest($parseScript, $jexamxml);
             }
-        }
-        else {
-            $parseScript = getFile($args, "parse-script", function() { return findFileInCwd("parse.php"); });
-            $intScript = getFile($args, "int-script", function() { return findFileInCwd("interpret.py"); });
+        } else {
+            $parseScript = getFile($args, "parse-script", function () {
+                return findFileInCwd("parse.php");
+            });
+            $intScript = getFile($args, "int-script", function () {
+                return findFileInCwd("interpret.py");
+            });
             $testFn = bothTest($parseScript, $intScript);
         }
 
@@ -546,21 +561,82 @@ function main()
 
         $groupedFiles = groupFiles(walk($directory, $recursive));
 
+        print("<!DOCTYPE html>\n" .
+            "<html lang=\"en\">\n" .
+            "<head>\n" .
+            "\t<meta charset=\"UTF-8\">\n" .
+            "\t<meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\">\n" .
+            "\t<title>IPP tests - $directory></title\n>" .
+            "\t<style>th {padding: .25rem;} </style>\n".
+            "</head>\n" .
+            "<body style=\"max-width: 1000px; margin: 0 auto;\">\n".
+            "\t<main style=\"display: flex; flex-direction: column; align-items: center;\">\n".
+            "\t\t<h1 style=\"text-align:center;\">IPP Test results - $directory</h1>\n".
+            "\t\t<table style=\"order: 2; width: 100%;\">\n".
+            "\t\t\t<tr style=\"padding:\">\n".
+            "\t\t\t\t<th>\n".
+            "\t\t\t\t\tTest name\n".
+            "\t\t\t\t</th>\n".
+            "\t\t\t\t<th>\n".
+            "\t\t\t\t\tReturn code\n".
+            "\t\t\t\t</th>\n".
+            "\t\t\t\t<th>\n".
+            "\t\t\t\t\tStatus\n".
+            "\t\t\t\t</th>\n".
+            "\t\t\t</tr>\n"
+            );
+
         foreach ($groupedFiles as $testCase) {
             $testCase->prepareFiles();
             $result = $testFn($testCase);
+            $status = null;
             if ($result === true) {
                 $passed++;
-            }
-            else {
+                $status = "PASSED";
+            } else {
                 $failed++;
+                $status = "FAILED";
             }
-            fprintf(STDERR, "%s - %s\n", $testCase->name, $result === true ? "PASSED" : "FAILED");
+            fprintf(STDERR, "%s - %s\n", $testCase->name, $status);
+            print(
+                "\t\t\t<tr>\n".
+                "\t\t\t\t<td>\n".
+                "\t\t\t\t\t$testCase->name\n".
+                "\t\t\t\t</td>\n".
+                "\t\t\t\t<td>\n".
+                "\t\t\t\t\t$testCase->scriptRC\n".
+                "\t\t\t\t</td>\n".
+                "\t\t\t\t<td>\n".
+                "\t\t\t\t\t$status\n".
+                "\t\t\t\t</td>\n".
+                "\t\t\t</tr>\n"
+            );
         }
 
+        $total = $passed + $failed;
+        $ratio = $passed / $total * 100;
+
+        // round to 2 decimals
+        $ratio = round($ratio, 2);
+
+        print(
+            "\t\t</table>\n".
+            "\t\t<section style=\"order: 1; align-self: flex-start;\">\n".
+            "\t\t\t<h2>Test statistics</h2>\n".
+            "\t\t\t<ul style=\"list-style: none; padding: 1rem 0;\">\n".
+            "\t\t\t\t<li>PASSED: $passed</li>\n".
+            "\t\t\t\t<li>FAILED: $failed</li>\n".
+            "\t\t\t\t<li>TOTAL: $total</li>\n".
+            "\t\t\t\t<li>SUCCESS RATE: $ratio%</li>\n".
+            "\t\t\t</ul>\n".
+            "\t\t</section>\n".
+            "\t</main>\n".
+            "</body>\n".
+            "</html>\n"
+        );
+
         fprintf(STDERR, "PASSED: %d\nFAILED: %d\nTOTAL: %d\n", $passed, $failed, $passed + $failed);
-    }
-    catch(TestError $e) {
+    } catch (TestError $e) {
         fprintf(STDERR, "Error: {$e->getMessage()}\nStatus code: {$e->statusCode}\n");
         exit($e->statusCode);
     }
