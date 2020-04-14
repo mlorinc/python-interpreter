@@ -381,11 +381,17 @@ class Memory(object):
                         IPPError.SYNTAX_ERROR, f"Unknown frame {scope}")
 
     def declareVariable(self, scope: str, name: str, element: Element):
-        try:
-            self._getFrame(scope, element)[name] = (ArgumentType.UNINITIALIZED, None)
-        except:
-            raise InterpreterError(element,
-                                   IPPError.FRAME_DOES_NOT_EXIST, "Cannot get frame. Have you created one?")
+            frame = self._getFrame(scope, element)
+
+            if frame is None:
+                raise InterpreterError(element,
+                        IPPError.FRAME_DOES_NOT_EXIST, "Cannot get frame. Have you created one?")
+
+            if name in frame:
+                raise InterpreterError(element,
+                        IPPError.SEMANTIC, f"Varible '{name}' was already declared")
+
+            frame[name] = (ArgumentType.UNINITIALIZED, None)
 
     def setVariable(self, scope: str, name: str, datatype: ArgumentType, value, element: Element):
         try:
@@ -840,6 +846,8 @@ def conditionalJump(interpreter: IPPInterpreter, instruction: Instruction, label
     if result:
         return (IPPInterpreterCommand.JUMP, {"label": label.value})
     else:
+        if label.value not in interpreter._labels:
+            raise InterpreterError(label, IPPError.SEMANTIC, f"Label '{label.value}' is not defined")
         return None
 
 
@@ -878,7 +886,7 @@ def jumpifneq(interpreter: IPPInterpreter, instruction: Instruction, label: Argu
         atype, avalue = a
         btype, bvalue = b
 
-        if (atype == btype and avalue != bvalue) or atype == ArgumentType.NIL or btype == ArgumentType.NIL:
+        if (atype == btype and avalue != bvalue) or (atype == ArgumentType.NIL and btype != ArgumentType.NIL) or (btype == ArgumentType.NIL and atype != ArgumentType.NIL):
             return True
         elif atype == btype and avalue == bvalue:
             return False
@@ -917,18 +925,21 @@ def popframe(interpreter: IPPInterpreter, instruction: Instruction):
 
 
 @Instruction.register
-def call(interpreter, instruction: Instruction, label: Argument):
+def call(interpreter: IPPInterpreter, instruction: Instruction, label: Argument):
     expect(label, Argument.LABEL)
     return (IPPInterpreterCommand.CALL, {"label": label.value})
 
 
 @Instruction.register
-def exit(interpreter, instruction: Instruction, status: Argument):
-    expectType(status, {ArgumentType.INT})
-    if 0 <= status.value <= 49:
-        raise ProgramExit(status.value)
+def exit(interpreter: IPPInterpreter, instruction: Instruction, symb: Argument):
+    expect(symb, Argument.SYMB)
+
+    statusType, statusValue = getSymbol(interpreter, symb, {ArgumentType.INT})
+
+    if 0 <= statusValue <= 49:
+        raise ProgramExit(statusValue)
     else:
-        raise InterpreterError(instruction, IPPError.INVALID_VALUE_OF_OPERAND, f"Exit code out of range. Must be between 0 and 49. Got {status.value}")
+        raise InterpreterError(instruction, IPPError.INVALID_VALUE_OF_OPERAND, f"Exit code out of range. Must be between 0 and 49. Got {statusValue}")
 
 @Instruction.register(name="return")
 def i_return(interpreter, instruction: Instruction):
@@ -1140,7 +1151,7 @@ def relationOperator(interpreter: IPPInterpreter, instruction: Instruction, var:
     def helper(a, b):
         atype, avalue = a
         btype, bvalue = b
-        if atype == btype:
+        if atype == btype and (atype in { ArgumentType.INT, ArgumentType.BOOL, ArgumentType.STRING, ArgumentType.FLOAT } or (supportsNil and atype == ArgumentType.NIL)):
             return (ArgumentType.BOOL, operator(avalue, bvalue))
         elif (atype == ArgumentType.NIL or btype == ArgumentType.NIL) and supportsNil:
             return (ArgumentType.BOOL, False)
@@ -1290,6 +1301,10 @@ def stri2int(interpreter: IPPInterpreter, instruction: Instruction, var: Argumen
         _, string = string
         _, position = position
         try:
+            if position < 0:
+                raise InterpreterError(symb1, IPPError.INVALID_STRING_OPERATION,
+                        f"Index cannot be negative. Index: {position}.")
+
             return (ArgumentType.INT, ord(string[position]))
         except IndexError:
             raise InterpreterError(symb1, IPPError.INVALID_STRING_OPERATION,
@@ -1360,11 +1375,14 @@ def i_read(interpreter: IPPInterpreter, instruction: Instruction, var: Argument,
             inputType = ArgumentType.STRING
             inputValue = content
         else:
-            inputType, inputValue = parseToTokens(arg.value, content, instruction)
+            try:
+                inputType, inputValue = parseToTokens(arg.value, content, instruction)
+            except InterpreterError as e:
+                raise EOFError()
+                
 
         if inputType not in {ArgumentType.STRING, ArgumentType.BOOL, ArgumentType.INT, ArgumentType.FLOAT}:
-            raise InterpreterError(arg, IPPError.INVALID_VALUE_OF_OPERAND,
-                                   "Read only support types {string, bool, int, float}")
+            raise EOFError()
 
         interpreter.memory.setVariable(
             var.scope, var.value, inputType, inputValue, instruction)
@@ -1392,8 +1410,6 @@ def write(interpreter: IPPInterpreter, instruction: Instruction, symb: Argument)
         text = "true" if value else "false"
     elif tipe == ArgumentType.NIL:
         text = ""
-    elif tipe == ArgumentType.TYPE:
-        text = value.name.lower() if value != "" else value
     elif tipe == ArgumentType.FLOAT:
         text = float.hex(value)
     else:
@@ -1441,6 +1457,8 @@ def getchar(interpreter: IPPInterpreter, instruction: Instruction, var: Argument
 
     def helper(string, index):
         try:
+            if index[1] < 0:
+                raise IndexError()
             return (ArgumentType.STRING, string[1][index[1]])
         except IndexError:
             raise InterpreterError(instruction, IPPError.INVALID_STRING_OPERATION,
@@ -1470,13 +1488,27 @@ def setchar(interpreter: IPPInterpreter, instruction: Instruction, var: Argument
 
     if varType is not ArgumentType.STRING:
         raise InterpreterError(
-            var, IPPError.INVALID_VALUE_OF_OPERAND, "Var must be string variable")
+            var, IPPError.INCOMPATIBLE_OPERANDS, "Var must be string variable")
 
     (indexType, index) = getSymbol(interpreter, symb1, {ArgumentType.INT})
     (stringType, char) = getSymbol(interpreter, symb2, {ArgumentType.STRING})
 
+    if index < 0:
+        raise InterpreterError(
+            symb1, IPPError.INVALID_STRING_OPERATION, "Index cannot be negative")        
+
+    if len(char) > 0:
+        char = char[0]
+    else:
+        raise InterpreterError(
+            symb1, IPPError.INVALID_STRING_OPERATION, "Char cannot be empty")   
+
+    if index >= len(varValue):
+        raise InterpreterError(
+            symb2, IPPError.INVALID_STRING_OPERATION, f"Index out of string range '{varValue}'[{index}]")
+
     try:
-        varValue[index] = char
+        varValue = varValue[:index] + char + varValue[index + 1:]
         interpreter.memory.setVariable(
             var.scope,
             var.value,
@@ -1486,7 +1518,7 @@ def setchar(interpreter: IPPInterpreter, instruction: Instruction, var: Argument
         )
     except IndexError:
         raise InterpreterError(
-            symb2, IPPError.INVALID_STRING_OPERATION, "Index out of string range")
+            symb2, IPPError.INVALID_STRING_OPERATION, f"Index out of string range '{varValue}'[{index}]")
 
 
 @Instruction.register(name="type")
